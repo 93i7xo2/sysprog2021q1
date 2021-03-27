@@ -5,6 +5,9 @@
 #define __ALIGN_KERNEL_MASK(x, mask) (((x) + (mask)) & ~(mask))
 #define ALIGN_DOWN(x, a) __ALIGN_KERNEL((x) - ((a)-1), (a))
 
+#define READMASK(x) (__builtin_expect(!!(x), 1) ? ((uint64_t)(~0ULL) << (64 - (x))) : 0ULL)
+#define WRITEMASK(x) (~READMASK(x))
+
 #define reverse_byte(n)                                                             \
     __extension__({                                                                 \
         __typeof__(n + 0) _n = (n);                                                 \
@@ -122,24 +125,58 @@ void bitcpy64(void *_dest,      /* Address of the buffer to write to */
         }
 
         if (bitsize < 64)
-            data &= (int64_t)(1UL << 63) >> (bitsize - 1);
+            data &= READMASK(bitsize);
 
         uint64_t original = reverse_byte(*dest);
-        uint64_t mask = write_lhs ? ((int64_t)(1UL << 63) >> (write_lhs - 1)) : 0;
+        uint64_t mask = READMASK(write_lhs);
         if (bitsize > write_rhs)
         {
             /* Cross multiple bytes */
             *dest++ = reverse_byte((original & mask) | (data >> write_lhs));
-            original = reverse_byte(*dest) & ~((int64_t)(1UL << 63) >> (bitsize - write_rhs - 1));
+            original = reverse_byte(*dest) & WRITEMASK(bitsize - write_rhs);
             *dest = reverse_byte(original | (data << write_rhs));
         }
         else
         {
             // Since write_lhs + bitsize is never >= 64, no out-of-bound access.
-            mask |= ~((int64_t)(1UL << 63) >> (write_lhs + bitsize - 1));
+            mask |= WRITEMASK(write_lhs + bitsize);
             *dest++ = reverse_byte((original & mask) | (data >> write_lhs));
         }
 
         count -= bitsize;
     }
+}
+
+void bitcpy64_branch_predict(void *_dest,      /* Address of the buffer to write to */
+                             size_t _write,    /* Bit offset to start writing to */
+                             const void *_src, /* Address of the buffer to read from */
+                             size_t _read,     /* Bit offset to start reading from */
+                             size_t count)
+{
+    size_t read_lhs = _read & 63;
+    size_t read_rhs = 64 - read_lhs;
+    const uint64_t *source = (const uint64_t *)_src + (_read / 64);
+    size_t write_lhs = _write & 63;
+    size_t write_rhs = 64 - write_lhs;
+    uint64_t *dest = (uint64_t *)_dest + (_write / 64);
+
+    uint64_t data, original;
+    /* copy until count < 64 bits */
+    for (size_t bytecount = count >> 6; bytecount > 0; bytecount--)
+    {
+        data = reverse_byte(*source++);
+        data = data << read_lhs | (reverse_byte(*source) >> read_rhs);
+        original = reverse_byte(*dest) & READMASK(write_lhs);
+        *dest++ = reverse_byte(original | (data >> write_lhs));
+        *dest = reverse_byte((reverse_byte(*dest) >> write_lhs) | (data << write_rhs));
+    }
+    count &= 63;
+
+    /* copy the remaining count */
+    data = reverse_byte(*source++);
+    data = ((data << read_lhs) | (reverse_byte(*source) >> read_rhs)) & READMASK(count);
+    original = (reverse_byte(*dest) & READMASK(write_lhs));
+    *dest++ = reverse_byte(original | ((data & READMASK(count)) >> write_lhs));
+    if (count > write_rhs)
+        *dest = reverse_byte((reverse_byte(*dest) & WRITEMASK(count - write_rhs)) | (data << write_rhs));
 }

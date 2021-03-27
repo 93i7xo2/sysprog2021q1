@@ -9,6 +9,7 @@
 #define BUFFER_SIZE 8 << 10 // 8 kB
 #define OFFSET sizeof(uint64_t)
 #define COUNT_MAX ((BUFFER_SIZE>>1) << 3) // 4k*8 bits
+#define ROUND 100
 
 static uint8_t output[BUFFER_SIZE], input[BUFFER_SIZE], tmp[BUFFER_SIZE];
 
@@ -35,15 +36,14 @@ int main(int _argc, char **_argv)
     {
         printf("%d ", i);
 
+        int j = rand() % 64, k = rand() % 64;
+
         // Baseline
         clock_gettime(CLOCK_ID, &start);
-        for (int j = 0; j < OFFSET; ++j)
+        for (int c = 0; c < ROUND; ++c)
         {
-            for (int k = 0; k < OFFSET; ++k)
-            {
-                memset(&output[0], 0x00, sizeof(output));
-                bitcpy(&output[0], k, &input[0], j, i);
-            }
+            memset(&output[0], 0x00, sizeof(output));
+            bitcpy(&output[0], k, &input[0], j, i);
         }
         clock_gettime(CLOCK_ID, &end);
         printf("%lf ", (double)(end.tv_sec - start.tv_sec) +
@@ -53,17 +53,14 @@ int main(int _argc, char **_argv)
 
         // Reading or writing 64-bit at a time
         clock_gettime(CLOCK_ID, &start);
-        for (int j = 0; j < OFFSET; ++j)
+        for (int c = 0; c < ROUND; ++c)
         {
-            for (int k = 0; k < OFFSET; ++k)
-            {
-                memset(&output[0], 0x00, sizeof(output));
-                bitcpy64(&output[0], k, &input[0], j, i);
-            }
+            memset(&output[0], 0x00, sizeof(output));
+            bitcpy64(&output[0], k, &input[0], j, i);
         }
         clock_gettime(CLOCK_ID, &end);
-        printf("%lf \n", (double)(end.tv_sec - start.tv_sec) +
-                             (end.tv_nsec - start.tv_nsec) / ONE_SEC);
+        printf("%lf\n", (double)(end.tv_sec - start.tv_sec) +
+                           (end.tv_nsec - start.tv_nsec) / ONE_SEC);
 
         assert(memcmp(tmp, output, BUFFER_SIZE) == 0);
     }
