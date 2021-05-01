@@ -26,9 +26,9 @@ if __name__ == "__main__":
 
     for i in tqdm(range(runs)):
         ret = subprocess.run(
-            f'sudo taskset -c {target_cpu} ./xs>>./xs.txt', shell=True)
+            f'sudo taskset -c {target_cpu} ./xs_benchmark>>./xs.txt', shell=True)
         ret = subprocess.run(
-            f'sudo taskset -c {target_cpu} ./string>>./string.txt', shell=True)
+            f'sudo taskset -c {target_cpu} ./string_benchmark>>./string.txt', shell=True)
 
     df = pd.read_csv('xs.txt', delimiter=' ', header=None)
     df.columns = ['time']

@@ -1,13 +1,15 @@
-all: test
+CFLAGS=-std=c11 -D_GNU_SOURCE
 
 .PHONY: clean
 
-build:
-	gcc -o xs -std=gnu11 xs.c
-	g++ -o string xs.cpp
+xs_benchmark: xs_benchmark.c xs.h
+	$(CC) -o $@ $< $(CFLAGS)
 
-test: build
+string_benchmark: string_benchmark.cpp
+	$(CXX) -o $@ $<
+
+test: xs_benchmark string_benchmark
 	./test.sh
 
 clean:
-	rm -rf xs string *.txt
+	rm -f string_benchmark xs_benchmark

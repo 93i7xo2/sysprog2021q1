@@ -1,8 +1,9 @@
-#include "xs.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <fcntl.h>
 #include <time.h>
+
+#include "xs.h"
 
 #define CLOCK_ID CLOCK_MONOTONIC_RAW
 #define ONE_SEC 1e9
@@ -12,7 +13,6 @@
 int main(int argc, char *argv[])
 {
     uint8_t buf[21] = {0};
-    size_t count;
     xs string[SIZE];
     int32_t *tmp[SIZE];
 
@@ -22,7 +22,7 @@ int main(int argc, char *argv[])
     int fd = open("/dev/urandom", O_RDONLY);
     for (int i = 0; i < SIZE; ++i)
     {
-        count = read(fd, buf, sizeof(buf) - 1);
+        read(fd, buf, sizeof(buf) - 1);
         string[i] = *xs_tmp((const void *)buf);
         tmp[i] = (int32_t *)malloc(sizeof(int32_t));
     }
