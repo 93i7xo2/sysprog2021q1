@@ -85,6 +85,7 @@ static struct __tpool_future *tpool_future_create(void) {
     pthread_mutex_init(&future->mutex, NULL);
     pthread_condattr_t attr;
     pthread_condattr_init(&attr);
+    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
     pthread_cond_init(&future->cond_finished, &attr);
     pthread_condattr_destroy(&attr);
   }
