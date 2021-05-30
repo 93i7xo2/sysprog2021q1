@@ -16,13 +16,20 @@ static void *bpp(void *arg) {
   return (void *)product;
 }
 
-int main() {
+int main(int argc, char** argv) {
+
+  if (argc < 2){
+    printf("Usage: ./pi <thread count>\n");
+    return -1;
+  }
+
+  size_t thcount = abs(atoi(argv[1]));
   int bpp_args[PRECISION + 1];
   double bpp_sum = 0;
   struct timespec start, end;
   clock_gettime(CLOCK_MONOTONIC, &start);
 
-  tpool_t pool = tpool_create(4);
+  tpool_t pool = tpool_create(thcount);
   tpool_future_t futures[PRECISION + 1];
 
   for (int i = 0; i <= PRECISION; i++) {
