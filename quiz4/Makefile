@@ -1,4 +1,4 @@
-CFLAGS = -Wall -O0 -g -lpthread -lm -std=c99 -D_GNU_SOURCE
+CFLAGS = -Wall -O0 -g -lpthread -lm -std=c99 -D_GNU_SOURCE -fsanitize=thread -DDEBUG
 TARGET = pi
 
 DEPS := pi.c

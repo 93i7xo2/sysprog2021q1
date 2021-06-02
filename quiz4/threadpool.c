@@ -3,6 +3,7 @@
 
 typedef struct __tpool_future *tpool_future_t;
 typedef struct __threadpool *tpool_t;
+typedef struct __jobqueue jobqueue_t;
 
 /**
  * Create a thread pool containing specified number of threads.
@@ -29,7 +30,8 @@ int tpool_join(tpool_t pool);
  * NULL is returned. Each tpool_future_get() resets the timeout status on
  * @future.
  */
-void *tpool_future_get(tpool_future_t future, unsigned int seconds);
+void *tpool_future_get(tpool_future_t future, unsigned int milliseconds,
+                       jobqueue_t *jobqueue);
 
 /**
  * Destroy the future object and free resources once it is no longer used.
@@ -108,26 +110,69 @@ int tpool_future_destroy(struct __tpool_future *future) {
   return 0;
 }
 
-void *tpool_future_get(struct __tpool_future *future, unsigned int seconds) {
+void *tpool_future_get(struct __tpool_future *future, unsigned int milliseconds,
+                       jobqueue_t *jobqueue) {
   pthread_mutex_lock(&future->mutex);
   /* turn off the timeout bit set previously */
   future->flag &= ~__FUTURE_TIMEOUT;
   while ((future->flag & __FUTURE_FINISHED) == 0) {
-    if (seconds) {
+    if (milliseconds) {
+#define NANOSECOND 1000000000UL
       struct timespec expire_time;
       clock_gettime(CLOCK_MONOTONIC, &expire_time);
-      expire_time.tv_sec += seconds;
+      expire_time.tv_nsec += (milliseconds % 1000) * NANOSECOND / 1000;
+      if (expire_time.tv_nsec/NANOSECOND){
+        expire_time.tv_nsec %= 1000000000;
+        ++expire_time.tv_sec;
+      }
+      expire_time.tv_sec += milliseconds/1000;
+#undef NANOSECOND
+
       int status = pthread_cond_timedwait(&future->cond_finished,
                                           &future->mutex, &expire_time);
+
       if (status == ETIMEDOUT) {
         future->flag |= __FUTURE_TIMEOUT;
+        if (future->flag & __FUTURE_RUNNING)
+          goto wait;
+
+        /* find the corresponding task from job queue */
+        pthread_mutex_lock(&jobqueue->rwlock);
+        threadtask_t *task = jobqueue->head, *prev_task = NULL;
+        while (task) {
+          if (task->future == future)
+            break;
+          prev_task = task;
+          task = task->next;
+        }
+        if (!task) {
+          /* maybe it will fail */
+          pthread_mutex_unlock(&jobqueue->rwlock);
+          goto wait;
+        }
+
+        /* remove the task and the future */
+        if (!prev_task)
+          jobqueue->head = task->next; // head
+        else
+          prev_task->next = task->next;
+        if (!task->next)
+          jobqueue->tail = prev_task; // tail
+
         pthread_mutex_unlock(&future->mutex);
+        pthread_mutex_destroy(&task->future->mutex);
+        pthread_cond_destroy(&task->future->cond_finished);
+        free(task->future);
+        free(task);
+        pthread_mutex_unlock(&jobqueue->rwlock);
         return NULL;
       }
-    } else
+    } else {
+    /* wait until the task is completed */
+    wait:
       pthread_cond_wait(&future->cond_finished, &future->mutex); // FFF;
+    }
   }
-
   pthread_mutex_unlock(&future->mutex);
   return future->result;
 }
@@ -143,23 +188,6 @@ static jobqueue_t *jobqueue_create(void) {
 }
 
 static void jobqueue_destroy(jobqueue_t *jobqueue) {
-  threadtask_t *tmp = jobqueue->head;
-  while (tmp) {
-    jobqueue->head = jobqueue->head->next;
-    pthread_mutex_lock(&tmp->future->mutex);
-    if (tmp->future->flag & __FUTURE_DESTROYED) {
-      pthread_mutex_unlock(&tmp->future->mutex);
-      pthread_mutex_destroy(&tmp->future->mutex);
-      pthread_cond_destroy(&tmp->future->cond_finished);
-      free(tmp->future);
-    } else {
-      tmp->future->flag |= __FUTURE_CANCELLED;
-      pthread_mutex_unlock(&tmp->future->mutex);
-    }
-    free(tmp);
-    tmp = jobqueue->head;
-  }
-
   pthread_mutex_destroy(&jobqueue->rwlock);
   pthread_cond_destroy(&jobqueue->cond_nonempty);
   free(jobqueue);

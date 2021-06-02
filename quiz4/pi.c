@@ -5,6 +5,12 @@
 #define PRECISION 100 /* upper bound in BPP sum */
 #define ONE_SEC 1000000000.0
 
+#ifdef DEBUG
+# define DEBUG_PRINT(x) printf x
+#else
+# define DEBUG_PRINT(x) do {} while (0)
+#endif
+
 /* Use Bailey–Borwein–Plouffe formula to approximate PI */
 static void *bpp(void *arg) {
   int k = *(int *)arg;
@@ -18,15 +24,19 @@ static void *bpp(void *arg) {
 
 int main(int argc, char** argv) {
 
-  if (argc < 2){
-    printf("Usage: ./pi <thread count>\n");
+  if (argc < 2) {
+    printf("Usage: ./pi THREAD_COUNT [TIME_LIMIT]\n");
     return -1;
   }
 
   size_t thcount = abs(atoi(argv[1]));
+  unsigned int time_limit =
+      argc > 2 ? abs(atoi(argv[2])) : 0; /* 0 = blocking wait */
   int bpp_args[PRECISION + 1];
   double bpp_sum = 0;
   struct timespec start, end;
+  printf("Thread count: %ld\nTime limit: %d ms\n", thcount, time_limit);
+
   clock_gettime(CLOCK_MONOTONIC, &start);
 
   tpool_t pool = tpool_create(thcount);
@@ -37,11 +47,18 @@ int main(int argc, char** argv) {
     futures[i] = tpool_apply(pool, bpp, (void *)&bpp_args[i]);
   }
 
-  for (int i = 0; i <= PRECISION; i++) {
-    double *result = tpool_future_get(futures[i], 0 /* blocking wait */);
-    bpp_sum += *result;
-    tpool_future_destroy(futures[i]);
-    free(result);
+  for (int i = PRECISION; i >= 0; i--) {
+    if (!futures[i])
+      continue;
+    double *result = tpool_future_get(futures[i], time_limit, pool->jobqueue);
+    if (result) {
+      bpp_sum += *result;
+      free(result);
+      tpool_future_destroy(futures[i]);
+      DEBUG_PRINT(("Future[%d] completed!\n", i));
+    } else
+      DEBUG_PRINT(("Cannot get future[%d], timeout after %d milliseconds.\n", i,
+             time_limit));
   }
 
   tpool_join(pool);
