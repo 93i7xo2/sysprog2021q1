@@ -1,47 +1,7 @@
-#include <stddef.h>
-#include <pthread.h>
-
-typedef struct __tpool_future *tpool_future_t;
-typedef struct __threadpool *tpool_t;
-typedef struct __jobqueue jobqueue_t;
-
-/**
- * Create a thread pool containing specified number of threads.
- * If successful, the thread pool is returned. Otherwise, it
- * returns NULL.
- */
-tpool_t tpool_create(size_t count);
-
-/**
- * Schedules the specific function to be executed.
- * If successful, a future object representing the execution of
- * the task is returned. Otherwise, it returns NULL.
- */
-tpool_future_t tpool_apply(tpool_t pool, void *(*func)(void *), void *arg);
-
-/**
- * Wait for all pending tasks to complete before destroying the thread pool.
- */
-int tpool_join(tpool_t pool);
-
-/**
- * Return the result when it becomes available.
- * If @seconds is non-zero and the result does not arrive within specified time,
- * NULL is returned. Each tpool_future_get() resets the timeout status on
- * @future.
- */
-void *tpool_future_get(tpool_future_t future, unsigned int milliseconds,
-                       jobqueue_t *jobqueue);
-
-/**
- * Destroy the future object and free resources once it is no longer used.
- * It is an error to refer to a destroyed future object. Note that destroying
- * a future object does not prevent a pending task from being executed.
- */
-int tpool_future_destroy(tpool_future_t future);
-
+#define _GNU_SOURCE
+#include "threadpool.h"
 #include <errno.h>
-#include <pthread.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <time.h>
 
@@ -71,12 +31,6 @@ struct __tpool_future {
   void *result;
   pthread_mutex_t mutex;
   pthread_cond_t cond_finished;
-};
-
-struct __threadpool {
-  size_t count;
-  pthread_t *workers;
-  jobqueue_t *jobqueue;
 };
 
 static struct __tpool_future *tpool_future_create(void) {
@@ -121,11 +75,11 @@ void *tpool_future_get(struct __tpool_future *future, unsigned int milliseconds,
       struct timespec expire_time;
       clock_gettime(CLOCK_MONOTONIC, &expire_time);
       expire_time.tv_nsec += (milliseconds % 1000) * NANOSECOND / 1000;
-      if (expire_time.tv_nsec/NANOSECOND){
+      if (expire_time.tv_nsec / NANOSECOND) {
         expire_time.tv_nsec %= 1000000000;
         ++expire_time.tv_sec;
       }
-      expire_time.tv_sec += milliseconds/1000;
+      expire_time.tv_sec += milliseconds / 1000;
 #undef NANOSECOND
 
       int status = pthread_cond_timedwait(&future->cond_finished,
@@ -210,8 +164,9 @@ static void *jobqueue_fetch(void *queue) {
     pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, &old_state);
     pthread_testcancel();
 
-    while (!jobqueue->tail) pthread_cond_wait(&jobqueue->cond_nonempty, &jobqueue->rwlock); // GGG
-    
+    while (!jobqueue->tail)
+      pthread_cond_wait(&jobqueue->cond_nonempty, &jobqueue->rwlock); // GGG
+
     pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old_state);
     if (jobqueue->head == jobqueue->tail) {
       task = jobqueue->tail;
@@ -261,7 +216,7 @@ static void *jobqueue_fetch(void *queue) {
   }
 
   pthread_cleanup_pop(0);
-  pthread_exit(NULL);
+  return NULL; // in place of `pthread_exit(NULL)`
 }
 
 struct __threadpool *tpool_create(size_t count) {

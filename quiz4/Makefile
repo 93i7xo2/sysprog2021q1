@@ -1,17 +1,47 @@
-CFLAGS = -Wall -O0 -g -lpthread -lm -std=c99 -D_GNU_SOURCE -fsanitize=thread -DDEBUG
-TARGET = pi
+CFLAGS = -Wall -O3 -g -pthread -lm -std=gnu11
+VALGRIND_OPTS = --leak-check=full --show-leak-kinds=all -s
 
-DEPS := pi.c
+.PHONY: clean
 
-.PHONY: $(TARGET)
+all: check
 
-all: $(TARGET)
+%.o: %.c
+	$(CC) -o $@ -c -MMD -MF .$@.d $< $(CFLAGS)
 
-$(TARGET): $(DEPS)
+ringbuffer_example: ringbuffer.o ringbuffer_example.o
 	$(CC) -o $@ $^ $(CFLAGS)
 
-perf: $(TARGET)
-	sudo perf record -g --call-graph dwarf ./${TARGET}
+# thread-safe queue + thread pool
+threadpool_pi: threadpool.o threadpool_pi.c
+	$(CC) -o $@ $^ $(CFLAGS)
 
+# lock-free queue + affinity-based thread pool
+afn_threadpool_pi: ringbuffer.o afn_threadpool.o afn_threadpool_pi.c
+	$(CC) -o $@ $^ $(CFLAGS)
+
+# lock-free queue + thread pool
+afn_threadpool_pi_v2: ringbuffer.o afn_threadpool.o afn_threadpool_pi.c
+	$(CC) -o $@ -D ENABLE_AFN=false $^ $(CFLAGS)
+
+PRINTF = env printf
+PASS_COLOR = \e[32;01m
+NO_COLOR = \e[0m
+pass = $(PRINTF) "$(PASS_COLOR)$1 Passed [-]$(NO_COLOR)\n"
+
+# must compile with -O0
+check: ringbuffer_example threadpool_pi afn_threadpool_pi afn_threadpool_pi_v2
+	@for i in $^; do \
+	valgrind $(VALGRIND_OPTS) ./$$i 1>/dev/null; \
+	done && $(call pass)
+
+benchmark: threadpool_pi afn_threadpool_pi afn_threadpool_pi_v2
+	@./benchmark.sh && $(call pass)
+
+plot:
+	gnuplot plot.gp
+
+perf:
+	@sudo perf record -g --call-graph dwarf ./threadpool_pi
+	
 clean:
-	rm -f $(TARGET)
+	@rm -f ringbuffer_example threadpool_pi afn_threadpool_pi afn_threadpool_pi_v2 *.o .*.d *.txt *.png

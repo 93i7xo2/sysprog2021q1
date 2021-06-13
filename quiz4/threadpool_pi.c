@@ -1,14 +1,20 @@
-#include "threadpool.c"
+#define _GNU_SOURCE
+#include "threadpool.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
 
-#define PRECISION 100 /* upper bound in BPP sum */
+#define PRECISION 1000 /* upper bound in BPP sum */
 #define ONE_SEC 1000000000.0
 
 #ifdef DEBUG
-# define DEBUG_PRINT(x) printf x
+#define DEBUG_PRINT(x) printf x
 #else
-# define DEBUG_PRINT(x) do {} while (0)
+#define DEBUG_PRINT(x)                                                         \
+  do {                                                                         \
+  } while (0)
 #endif
 
 /* Use Bailey–Borwein–Plouffe formula to approximate PI */
@@ -22,14 +28,15 @@ static void *bpp(void *arg) {
   return (void *)product;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv) {
 
-  if (argc < 2) {
-    printf("Usage: ./pi THREAD_COUNT [TIME_LIMIT]\n");
+  if (argc > 3) {
+    printf("Usage: ./pi [THREAD_COUNT [TIME_LIMIT]]\n");
     return -1;
   }
 
-  size_t thcount = abs(atoi(argv[1]));
+  size_t thcount =
+      argc > 1 ? abs(atoi(argv[1])) : sysconf(_SC_NPROCESSORS_ONLN);
   unsigned int time_limit =
       argc > 2 ? abs(atoi(argv[2])) : 0; /* 0 = blocking wait */
   int bpp_args[PRECISION + 1];
@@ -47,7 +54,7 @@ int main(int argc, char** argv) {
     futures[i] = tpool_apply(pool, bpp, (void *)&bpp_args[i]);
   }
 
-  for (int i = PRECISION; i >= 0; i--) {
+  for (int i = 0; i <= PRECISION; i++) {
     if (!futures[i])
       continue;
     double *result = tpool_future_get(futures[i], time_limit, pool->jobqueue);
@@ -58,7 +65,7 @@ int main(int argc, char** argv) {
       DEBUG_PRINT(("Future[%d] completed!\n", i));
     } else
       DEBUG_PRINT(("Cannot get future[%d], timeout after %d milliseconds.\n", i,
-             time_limit));
+                   time_limit));
   }
 
   tpool_join(pool);
