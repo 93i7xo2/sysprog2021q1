@@ -1,7 +1,6 @@
 #!/bin/bash
-# cores=`nproc --all`
-cores=12
-round=50
+cores=`nproc --all`
+round=30
 testfiles=(threadpool_pi afn_threadpool_pi afn_threadpool_pi_v2)
 
 for file in "${testfiles[@]}"; do
