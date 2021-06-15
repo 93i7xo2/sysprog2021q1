@@ -20,9 +20,9 @@
 
 struct __ringbuffer {
   int fd;
-  size_t size, mask;
-  size_t read_offset, write_offset; // Last read/write
-  _Atomic int readble, writable;
+  uint64_t size, mask;
+  _Atomic int64_t count;
+  _Atomic uint64_t read_offset, write_offset; // Last read/write
   uint8_t *buffer;
 };
 
@@ -64,8 +64,7 @@ ringbuffer_t *rb_init(size_t len) {
 
   ret->read_offset = 0;
   ret->write_offset = 0;
-  ret->readble = 1;
-  ret->writable = 1;
+  ret->count = 0;
   return ret;
 }
 
@@ -82,46 +81,39 @@ void rb_destroy(ringbuffer_t *rb) {
   free(rb);
 }
 
+/* producer */
 bool enqueue(ringbuffer_t *rb, void **src) {
-  // is full
-  int expected = 1;
-  while (!atomic_compare_exchange_weak(&rb->readble, &expected, 0))
-    expected = 1;
-  while (!atomic_compare_exchange_weak(&rb->writable, &expected, 0))
-    expected = 1;
-  if (rb->read_offset == (rb->write_offset ^ rb->size)) {
-    atomic_store(&rb->readble, 1);
-    atomic_store(&rb->writable, 1);
-    return NULL;
-  }
-  atomic_store(&rb->readble, 1);
+  uint64_t _read, _write;
 
-  rb->write_offset += sizeof(void *);
-  rb->write_offset &= rb->mask;
-  memcpy(&rb->buffer[rb->write_offset], src, sizeof(void *));
-  atomic_store(&rb->writable, 1);
+  _read = atomic_load(&rb->read_offset);
+  _write = atomic_load(&rb->write_offset);
+  if (_read == (_write ^ rb->size))
+    return false;
 
+  memcpy(&rb->buffer[_write], src, sizeof(void *));
+  atomic_compare_exchange_strong(&rb->write_offset, &_write,
+                                 ((_write + sizeof(void *)) & rb->mask));
+  atomic_fetch_add_explicit(&rb->count, 1, memory_order_release);
   return true;
 }
 
+/* consumer */
 bool dequeue(ringbuffer_t *rb, void **dst) {
-  // is empty
-  int expected = 1;
-  while (!atomic_compare_exchange_weak(&rb->readble, &expected, 0))
-    expected = 1;
-  while (!atomic_compare_exchange_weak(&rb->writable, &expected, 0))
-    expected = 1;
-  if (rb->read_offset == rb->write_offset) {
-    atomic_store(&rb->readble, 1);
-    atomic_store(&rb->writable, 1);
-    return false;
-  }
-  atomic_store(&rb->writable, 1);
+  int64_t count, new_count;
 
-  rb->read_offset += sizeof(void *);
-  rb->read_offset &= rb->mask;
-  memcpy(dst, &rb->buffer[rb->read_offset], sizeof(void *));
-  atomic_store(&rb->readble, 1);
+  do {
+    count = atomic_load(&rb->count);
+    new_count = count - 1;
+    if (__builtin_expect((new_count < 0), 1))
+      return false;
+  } while (!atomic_compare_exchange_weak(&rb->count, &count, new_count));
+
+  uint64_t _read, new_read;
+  do {
+    _read = atomic_load(&rb->read_offset);
+    new_read = ((_read + sizeof(void *)) & rb->mask);
+    memcpy(dst, &rb->buffer[_read], sizeof(void *));
+  } while (!atomic_compare_exchange_weak(&rb->read_offset, &_read, new_read));
 
   return true;
 }

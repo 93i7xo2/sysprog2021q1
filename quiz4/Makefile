@@ -28,7 +28,6 @@ PASS_COLOR = \e[32;01m
 NO_COLOR = \e[0m
 pass = $(PRINTF) "$(PASS_COLOR)$1 Passed [-]$(NO_COLOR)\n"
 
-# must compile with -O0
 check: ringbuffer_example threadpool_pi afn_threadpool_pi afn_threadpool_pi_v2
 	@for i in $^; do \
 	valgrind $(VALGRIND_OPTS) ./$$i 1>/dev/null; \
