@@ -11,6 +11,8 @@
 #include <unistd.h>
 
 #define ALIGN(x, a) __ALIGN_KERNEL((x), (a))
+#define RB_OFF_MASK (0x00000000ffffffffUL)
+#define RB_COUNTER_MASK (0xffffffff00000000UL)
 
 #define err(s)                                                                 \
   do {                                                                         \
@@ -31,7 +33,7 @@ ringbuffer_t *rb_init(size_t len) {
   if (!ret)
     err("Failed to allocate memory");
 
-#define MAXBITS (sizeof(size_t) << 3)
+#define MAXBITS (sizeof(uint32_t) << 3)
   // Make the requested size be multiple of a page
   ret->size = ALIGN(len, getpagesize());
   ret->mask = (ret->size << 1) - 1;
@@ -85,14 +87,15 @@ void rb_destroy(ringbuffer_t *rb) {
 bool enqueue(ringbuffer_t *rb, void **src) {
   uint64_t _read, _write;
 
-  _read = atomic_load(&rb->read_offset);
-  _write = atomic_load(&rb->write_offset);
+  _read = atomic_load(&rb->read_offset) & RB_OFF_MASK;
+  _write = atomic_load(&rb->write_offset) & RB_OFF_MASK;
   if (_read == (_write ^ rb->size))
     return false;
 
   memcpy(&rb->buffer[_write], src, sizeof(void *));
-  atomic_compare_exchange_strong(&rb->write_offset, &_write,
-                                 ((_write + sizeof(void *)) & rb->mask));
+  _write = (_write + sizeof(void *)) & rb->mask;
+  _write |= ((uint64_t)*src << 32);
+  atomic_store_explicit(&rb->write_offset, _write, memory_order_release);
   atomic_fetch_add_explicit(&rb->count, 1, memory_order_release);
   return true;
 }
@@ -111,8 +114,8 @@ bool dequeue(ringbuffer_t *rb, void **dst) {
   uint64_t _read, new_read;
   do {
     _read = atomic_load(&rb->read_offset);
-    new_read = ((_read + sizeof(void *)) & rb->mask);
-    memcpy(dst, &rb->buffer[_read], sizeof(void *));
+    new_read = (((_read & RB_OFF_MASK) + sizeof(void *)) & rb->mask);
+    memcpy(dst, &rb->buffer[_read & RB_OFF_MASK], sizeof(void *));
   } while (!atomic_compare_exchange_weak(&rb->read_offset, &_read, new_read));
 
   return true;
