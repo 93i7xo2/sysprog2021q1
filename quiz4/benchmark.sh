@@ -1,6 +1,6 @@
 #!/bin/bash
 cores=`nproc --all`
-round=30
+round=100
 testfiles=(threadpool_pi afn_threadpool_pi afn_threadpool_pi_v2)
 
 for file in "${testfiles[@]}"; do
@@ -8,7 +8,7 @@ for file in "${testfiles[@]}"; do
     for thread_count in `seq 1 1 $cores`; do
         tmp=()
         for r in `seq 1 1 $round`; do
-            echo -ne "$file $thread_count/$cores $r/$round\r"
+            echo -ne "$file $thread_count/$cores $r/$round  \r"
             tmp+=($(./$file $thread_count | grep "time" | grep -oE "[0-9]+"))
         done
 
