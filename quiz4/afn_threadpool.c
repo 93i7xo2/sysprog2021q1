@@ -2,6 +2,8 @@
 #include "afn_threadpool.h"
 #include "ringbuffer.h"
 #include <errno.h>
+#include <likwid.h>
+#include <stdio.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -164,12 +166,39 @@ struct __threadpool {
 bool tp_init(threadpool_t **tp, int size, bool enable_afn) {
   *tp = (threadpool_t *)malloc(sizeof(threadpool_t) +
                                sizeof(workeragent_t *) * size);
+  // Load the LIKWID's topology module
+  if (topology_init() < 0) {
+    printf("Failed to initialize LIKWID's topology module\n");
+    return false;
+  }
+
+  CpuTopology_t topo = get_cpuTopology();
+  int numSockets = topo->numSockets,
+      numCoresPerSocket = topo->numCoresPerSocket,
+      numHWThreads = topo->numHWThreads;
+  int cpulist[numSockets * numCoresPerSocket * numHWThreads], idx = 0;
+  for (int socket = 0; socket < numSockets; ++socket) {
+    for (int core = 0; core < numCoresPerSocket; ++core) {
+      for (int i = 0; i < numHWThreads; ++i) {
+        int threadId = topo->threadPool[i].threadId,
+            coreId = topo->threadPool[i].coreId,
+            packageId = topo->threadPool[i].packageId,
+            apicId = topo->threadPool[i].apicId;
+        if (packageId == socket && coreId == core) {
+          cpulist[idx + threadId * (numCoresPerSocket * numSockets)] = apicId;
+        }
+      }
+      idx++;
+    }
+  }
+  topology_finalize();
+
   (*tp)->size = size;
   (*tp)->r = 0;
   (*tp)->sharedqueue = rb_init(QUEUESIZE);
   for (int i = 0; i < (*tp)->size; ++i) {
-    if (!workeragent_init(&(*tp)->workeragents[i], (*tp)->sharedqueue, i,
-                          enable_afn)) {
+    if (!workeragent_init(&(*tp)->workeragents[i], (*tp)->sharedqueue,
+                          cpulist[i], enable_afn)) {
       for (int j = 0; j < i; ++j) {
         pthread_cancel((*tp)->workeragents[i]->worker);
       }

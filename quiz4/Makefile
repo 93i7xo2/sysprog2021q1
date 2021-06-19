@@ -1,5 +1,8 @@
-CFLAGS = -Wall -O3 -g -pthread -lm -std=gnu11
-VALGRIND_OPTS = --leak-check=full --show-leak-kinds=all -s
+CFLAGS = -Wall -O3 -g -pthread -lm -llikwid -std=gnu11
+VALGRIND_OPTS = --leak-check=full \
+--show-leak-kinds=all \
+--suppressions=valgrind_supression.config \
+--error-exitcode=1 -s
 
 .PHONY: clean
 
@@ -30,7 +33,7 @@ pass = $(PRINTF) "$(PASS_COLOR)$1 Passed [-]$(NO_COLOR)\n"
 
 check: ringbuffer_example threadpool_pi afn_threadpool_pi afn_threadpool_pi_v2
 	@for i in $^; do \
-	valgrind $(VALGRIND_OPTS) ./$$i 1>/dev/null; \
+	valgrind $(VALGRIND_OPTS) ./$$i 1>/dev/null || exit 1; \
 	done && $(call pass)
 
 benchmark: threadpool_pi afn_threadpool_pi afn_threadpool_pi_v2
@@ -42,5 +45,9 @@ plot:
 perf:
 	@sudo perf record -g --call-graph dwarf ./threadpool_pi
 	
+prepare:
+	sudo apt install python3-pip likwid valgrind gnuplot
+	pip3 install pandas scipy
+
 clean:
 	@rm -f ringbuffer_example threadpool_pi afn_threadpool_pi afn_threadpool_pi_v2 *.o .*.d *.txt *.png
