@@ -31,8 +31,7 @@ int main(int argc, char **argv) {
       argc > 2 ? abs(atoi(argv[2])) : 0; /* 0 = blocking wait */
   int bpp_args[PRECISION + 1];
   double bpp_sum = 0;
-  int nthreads =
-      argc > 1 ? abs(atoi(argv[1])) : sysconf(_SC_NPROCESSORS_ONLN);
+  int nthreads = argc > 1 ? abs(atoi(argv[1])) : sysconf(_SC_NPROCESSORS_ONLN);
   printf("[%c] Affinity-based thread pool\n", ENABLE_AFN ? 'o' : 'x');
   printf("Assigned %d tasks between %d threads\n", PRECISION + 1, nthreads);
 
@@ -43,6 +42,12 @@ int main(int argc, char **argv) {
   if (!tp_init(&tp, nthreads, ENABLE_AFN))
     exit(EXIT_FAILURE);
   tpool_future_t *futures[PRECISION + 1];
+
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  printf("Creation time: %.0f ns\n",
+         (double)(end.tv_sec - start.tv_sec) * ONESECOND +
+             (end.tv_nsec - start.tv_nsec));
+  clock_gettime(CLOCK_MONOTONIC, &start);
 
   for (int i = 0; i <= PRECISION; i++) {
     bpp_args[i] = i;
@@ -58,12 +63,18 @@ int main(int argc, char **argv) {
       tpool_future_destroy(futures[i]);
     }
   }
+
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  printf("Execution time: %.0f ns\n",
+         (double)(end.tv_sec - start.tv_sec) * ONESECOND +
+             (end.tv_nsec - start.tv_nsec));
+  clock_gettime(CLOCK_MONOTONIC, &start);
+
   tp_join(tp);
   tp_destroy(tp);
 
   clock_gettime(CLOCK_MONOTONIC, &end);
-
-  printf("Elapsed time: %.0f ns\n",
+  printf("Deconstruction time: %.0f ns\n",
          (double)(end.tv_sec - start.tv_sec) * ONESECOND +
              (end.tv_nsec - start.tv_nsec));
   printf("PI calculated with %d terms: %.15f\n", PRECISION + 1, bpp_sum);

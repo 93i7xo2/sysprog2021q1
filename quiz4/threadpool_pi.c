@@ -41,13 +41,18 @@ int main(int argc, char **argv) {
       argc > 2 ? abs(atoi(argv[2])) : 0; /* 0 = blocking wait */
   int bpp_args[PRECISION + 1];
   double bpp_sum = 0;
-  struct timespec start, end;
   printf("Thread count: %ld\nTime limit: %d ms\n", thcount, time_limit);
-
+  struct timespec start, end;
   clock_gettime(CLOCK_MONOTONIC, &start);
 
   tpool_t pool = tpool_create(thcount);
   tpool_future_t futures[PRECISION + 1];
+
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  printf("Creation time: %.0f ns\n",
+         (double)(end.tv_sec - start.tv_sec) * ONE_SEC +
+             (end.tv_nsec - start.tv_nsec));
+  clock_gettime(CLOCK_MONOTONIC, &start);
 
   for (int i = 0; i <= PRECISION; i++) {
     bpp_args[i] = i;
@@ -68,11 +73,16 @@ int main(int argc, char **argv) {
                    time_limit));
   }
 
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  printf("Execution time: %.0f ns\n",
+         (double)(end.tv_sec - start.tv_sec) * ONE_SEC +
+             (end.tv_nsec - start.tv_nsec));
+  clock_gettime(CLOCK_MONOTONIC, &start);
+
   tpool_join(pool);
 
   clock_gettime(CLOCK_MONOTONIC, &end);
-
-  printf("Elapsed time: %.0f ns\n",
+  printf("Deconstruction time: %.0f ns\n",
          (double)(end.tv_sec - start.tv_sec) * ONE_SEC +
              (end.tv_nsec - start.tv_nsec));
   printf("PI calculated with %d terms: %.15f\n", PRECISION + 1, bpp_sum);

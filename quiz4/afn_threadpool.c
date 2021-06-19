@@ -3,9 +3,9 @@
 #include "ringbuffer.h"
 #include <errno.h>
 #include <likwid.h>
-#include <stdio.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -175,8 +175,7 @@ bool tp_init(threadpool_t **tp, int size, bool enable_afn) {
   CpuTopology_t topo = get_cpuTopology();
   int numSockets = topo->numSockets,
       numCoresPerSocket = topo->numCoresPerSocket,
-      numHWThreads = topo->numHWThreads;
-  int cpulist[numSockets * numCoresPerSocket * numHWThreads], idx = 0;
+      numHWThreads = topo->numHWThreads, cpulist[topo->numHWThreads], idx = 0;
   for (int socket = 0; socket < numSockets; ++socket) {
     for (int core = 0; core < numCoresPerSocket; ++core) {
       for (int i = 0; i < numHWThreads; ++i) {

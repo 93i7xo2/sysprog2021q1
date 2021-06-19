@@ -22,4 +22,3 @@ void *dequeue_must(ringbuffer_t *);
     if ((count) < SPINLOCK_BACKOFF_MAX)                                        \
       (count) += (count);                                                      \
   } while (0)
-  
