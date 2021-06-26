@@ -1,4 +1,4 @@
-CFLAGS = -Wall -O3 -g -pthread -lm -llikwid -std=gnu11
+CFLAGS = -Wall -O0 -g -pthread -lm -llikwid -std=gnu11
 VALGRIND_OPTS = --leak-check=full \
 --show-leak-kinds=all \
 --suppressions=valgrind_supression.config \

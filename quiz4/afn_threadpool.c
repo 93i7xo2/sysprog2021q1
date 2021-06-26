@@ -7,128 +7,67 @@
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <unistd.h>
 
-enum __future_flags {
-  __FUTURE_PENDING = 0,
-  __FUTURE_RUNNING = 01,
-  __FUTURE_FINISHED = 02,
-  __FUTURE_TIMEOUT = 04,
-  __FUTURE_CANCELLED = 010,
-  __FUTURE_DESTROYED = 020,
-};
+#define MAX_EVENTES 100
+#define MAX_TASKS 8
+
+/* refer to @sysprog/linux-timerfd */
+static void add_event(int epoll_fd, int fd, int state) {
+  struct epoll_event ev = {
+      .events = state,
+      .data.fd = fd,
+  };
+  epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev);
+  return;
+}
 
 struct __threadtask {
   void *(*func)(void *);
   void *arg;
-  tpool_future_t *future;
+  void **dstptr;
+  int id;
 };
 
-struct __tpool_future {
-  int flag;
-  void *result;
-  pthread_mutex_t mutex;
-  pthread_cond_t cond_finished;
-};
-
-bool tpool_future_create(tpool_future_t **ptr) {
-  *ptr = (tpool_future_t *)malloc(sizeof(tpool_future_t));
-  if (*ptr) {
-    (*ptr)->flag = __FUTURE_PENDING;
-    (*ptr)->result = NULL;
-    pthread_mutex_init(&(*ptr)->mutex, NULL);
-    pthread_condattr_t attr;
-    pthread_condattr_init(&attr);
-    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
-    pthread_cond_init(&(*ptr)->cond_finished, &attr);
-    pthread_condattr_destroy(&attr);
-    return true;
-  }
-  return false;
-}
-
-void tpool_future_destroy(tpool_future_t *future) {
-  if (!future)
-    return;
-  pthread_mutex_lock(&future->mutex);
-  if (future->flag & __FUTURE_FINISHED || future->flag & __FUTURE_CANCELLED) {
-    pthread_mutex_unlock(&future->mutex);
-    pthread_mutex_destroy(&future->mutex);
-    pthread_cond_destroy(&future->cond_finished);
-    free(future);
-  } else {
-    future->flag |= __FUTURE_DESTROYED;
-    pthread_mutex_unlock(&future->mutex);
-  }
-}
-
-tpool_future_t *tpool_apply(ringbuffer_t *rb, void *(*func)(void *),
-                            void *arg) {
+static int tpool_apply(ringbuffer_t *rb, void *(*func)(void *), void *arg,
+                       void **dstptr) {
+  static int id;
   threadtask_t *task = (threadtask_t *)malloc(sizeof(threadtask_t));
-  tpool_future_t *future;
   if (task) {
     task->func = func;
     task->arg = arg;
-    if (tpool_future_create(&future)) {
-      task->future = future;
-      enqueue_must(rb, (void *)task);
-      return future;
-    }
-    free(task);
+    task->dstptr = dstptr;
+    task->id = ++id;
+    enqueue_must(rb, (void *)task);
+    return task->id;
   }
-  return NULL;
-}
-
-void *tpool_future_get(tpool_future_t *future, unsigned int milliseconds) {
-  pthread_mutex_lock(&future->mutex);
-  /* turn off the timeout bit set previously */
-  future->flag &= ~__FUTURE_TIMEOUT;
-  while ((future->flag & __FUTURE_FINISHED) == 0) {
-    if (milliseconds) {
-      struct timespec expire_time;
-      clock_gettime(CLOCK_MONOTONIC, &expire_time);
-      expire_time.tv_nsec += (milliseconds % 1000) * ONESECOND / 1000;
-      if (expire_time.tv_nsec / ONESECOND) {
-        expire_time.tv_nsec %= 1000000000;
-        ++expire_time.tv_sec;
-      }
-      expire_time.tv_sec += milliseconds / 1000;
-
-      int status = pthread_cond_timedwait(&future->cond_finished,
-                                          &future->mutex, &expire_time);
-
-      if (status == ETIMEDOUT) {
-        future->flag |= __FUTURE_TIMEOUT;
-        if (future->flag & __FUTURE_RUNNING)
-          goto wait;
-        future->flag |= __FUTURE_DESTROYED;
-        return NULL;
-      }
-    } else {
-    wait:
-      pthread_cond_wait(&future->cond_finished, &future->mutex);
-    }
-  }
-  pthread_mutex_unlock(&future->mutex);
-  return future->result;
+  return -1;
 }
 
 typedef struct __workeragent {
   ringbuffer_t *shared_queue, *private_queue;
   pthread_t worker;
   void *(*loop)(void *);
+  int shared_epfd, private_epfd;
 } workeragent_t;
 
 static void *loop(void *);
-static bool workeragent_init(workeragent_t **, ringbuffer_t *, int, bool);
+static bool workeragent_init(workeragent_t **, ringbuffer_t *, int, bool, int);
 static void workeragent_destroy(workeragent_t *);
 
 static bool workeragent_init(workeragent_t **wa, ringbuffer_t *sharedqueue,
-                             int affinity_id, bool enable_afn) {
-  *wa = (workeragent_t *)malloc(sizeof(workeragent_t));
+                             int affinity_id, bool enable_afn,
+                             int shared_epfd) {
+  (*wa) = (workeragent_t *)malloc(sizeof(workeragent_t));
   (*wa)->shared_queue = sharedqueue;
   (*wa)->private_queue = rb_init(QUEUESIZE);
   (*wa)->loop = &loop;
+  (*wa)->shared_epfd = shared_epfd;
+  (*wa)->private_epfd = epoll_create(1);
+  if ((*wa)->private_epfd == -1)
+    return false;
 
   if (pthread_create(&(*wa)->worker, NULL, (*wa)->loop, (void *)*wa)) {
     workeragent_destroy(*wa);
@@ -152,12 +91,14 @@ static bool workeragent_init(workeragent_t **wa, ringbuffer_t *sharedqueue,
 }
 
 static void workeragent_destroy(workeragent_t *wa) {
+  close(wa->private_epfd);
   rb_destroy(wa->private_queue);
   free(wa);
 }
 
 struct __threadpool {
   int size;
+  int shared_epfd;
   _Atomic int r;             // used for round-robin
   ringbuffer_t *sharedqueue; // queue used for work stealing
   workeragent_t *workeragents[0];
@@ -166,6 +107,11 @@ struct __threadpool {
 bool tp_init(threadpool_t **tp, int size, bool enable_afn) {
   *tp = (threadpool_t *)malloc(sizeof(threadpool_t) +
                                sizeof(workeragent_t *) * size);
+  // Create epoll instance
+  (*tp)->shared_epfd = epoll_create(1);
+  if ((*tp)->shared_epfd == -1)
+    return false;
+
   // Load the LIKWID's topology module
   if (topology_init() < 0) {
     printf("Failed to initialize LIKWID's topology module\n");
@@ -197,7 +143,7 @@ bool tp_init(threadpool_t **tp, int size, bool enable_afn) {
   (*tp)->sharedqueue = rb_init(QUEUESIZE);
   for (int i = 0; i < (*tp)->size; ++i) {
     if (!workeragent_init(&(*tp)->workeragents[i], (*tp)->sharedqueue,
-                          cpulist[i], enable_afn)) {
+                          cpulist[i], enable_afn, (*tp)->shared_epfd)) {
       for (int j = 0; j < i; ++j) {
         pthread_cancel((*tp)->workeragents[i]->worker);
       }
@@ -219,37 +165,46 @@ void tp_destroy(threadpool_t *tp) {
     workeragent_destroy(tp->workeragents[i]);
   }
   rb_destroy(tp->sharedqueue);
+  close(tp->shared_epfd);
   free(tp);
 }
 
 void tp_join(threadpool_t *tp) {
   for (int i = 0; i < tp->size; ++i) {
-    while (!tpool_apply(tp->workeragents[i]->private_queue, NULL, NULL))
+    while (!tpool_apply(tp->workeragents[i]->private_queue, NULL, NULL, NULL))
       ;
   }
   for (int i = 0; i < tp->size; ++i)
     pthread_join(tp->workeragents[i]->worker, NULL);
 }
 
-tpool_future_t *tp_queue(threadpool_t *tp, void *fn, void *arg) {
-  tpool_future_t *future = tpool_apply(tp->sharedqueue, fn, arg);
-  return future;
+int tp_queue(threadpool_t *tp, void *fn, void *arg, void **dstptr) {
+  return tpool_apply(tp->sharedqueue, fn, arg, dstptr);
 }
 
-tpool_future_t *tp_queue_afn(threadpool_t *tp, int affinity_id, void *fn,
-                             void *arg) {
+int tp_queue_afn(threadpool_t *tp, int affinity_id, void *fn, void *arg,
+                 void **dstptr) {
   workeragent_t *wa = tp->workeragents[affinity_id % tp->size];
-  tpool_future_t *future = tpool_apply(wa->private_queue, fn, arg);
-  return future;
+  return tpool_apply(wa->private_queue, fn, arg, dstptr);
+}
+
+int tp_epfd_get(threadpool_t *tp) { return tp->shared_epfd; }
+
+void tp_task_cancel(threadpool_t *tp, int task_id) {
+  for (int i = 0; i < tp->size; ++i) {
+    int efd = eventfd(task_id, EFD_CLOEXEC | EFD_NONBLOCK);
+    add_event(tp->workeragents[i]->private_epfd, efd, EPOLLIN);
+    printf("Cancel task-%d from [worker-%d]\n", task_id, i);
+  }
 }
 
 static void *loop(void *arg) {
   workeragent_t *wa = (workeragent_t *)arg;
   ringbuffer_t *p_queue = wa->private_queue, *s_queue = wa->shared_queue;
   threadtask_t *task;
-  int count = 0;
-  // To-do
-  // int old_state;
+  int shared_epfd = wa->shared_epfd, private_epfd = wa->private_epfd, count = 0;
+  struct epoll_event events[MAX_EVENTES];
+  int cancelled_tasks[MAX_TASKS] = {-1}, ccount = -1;
 
   while (1) {
     while (
@@ -258,41 +213,35 @@ static void *loop(void *arg) {
 
     /* Terminate pthread */
     if (!task->func) {
-      pthread_mutex_destroy(&task->future->mutex);
-      pthread_cond_destroy(&task->future->cond_finished);
-      free(task->future);
       free(task);
       break;
     }
 
-    pthread_mutex_lock(&task->future->mutex);
-    if (task->future->flag & __FUTURE_CANCELLED) {
-      pthread_mutex_unlock(&task->future->mutex);
-      free(task);
-      continue;
-    } else {
-      task->future->flag |= __FUTURE_RUNNING;
-      pthread_mutex_unlock(&task->future->mutex);
+    /* Receive cancellation request */
+    int id = task->id, fs = epoll_wait(private_epfd, events, MAX_EVENTES, 0);
+    for (int i = 0; i < fs; ++i) {
+      uint64_t task_id;
+      if (eventfd_read(events[i].data.fd, &task_id) != -1) {
+        cancelled_tasks[(++ccount) % MAX_TASKS] = task_id;
+        close(events[i].data.fd);
+      }
+    }
+    for (int i = 0; i < MAX_TASKS; ++i) {
+      if (cancelled_tasks[i] == id)
+        goto _done;
     }
 
-    // To-do
-    // pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, &old_state);
-    // pthread_testcancel();
-    void *result = task->func(task->arg);
-    // pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &old_state);
+    /* Execute task */
+    *task->dstptr = task->func(task->arg);
 
-    pthread_mutex_lock(&task->future->mutex);
-    if (task->future->flag & __FUTURE_DESTROYED) {
-      pthread_mutex_unlock(&task->future->mutex);
-      pthread_mutex_destroy(&task->future->mutex);
-      pthread_cond_destroy(&task->future->cond_finished);
-      free(task->future);
-    } else {
-      task->future->flag |= __FUTURE_FINISHED;
-      task->future->result = result;
-      pthread_cond_broadcast(&task->future->cond_finished);
-      pthread_mutex_unlock(&task->future->mutex);
-    }
+    /* Register to the poller */
+    int efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    add_event(shared_epfd, efd, EPOLLIN);
+
+    /* Send event */
+    eventfd_write(efd, (uint64_t)id);
+
+  _done:
     free(task);
 
     /* Avoid starvation */

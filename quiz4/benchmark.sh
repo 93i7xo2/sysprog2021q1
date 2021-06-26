@@ -11,7 +11,7 @@ for file in "${testfiles[@]}"; do
         deconstruction=()
         for r in `seq 1 1 $round`; do
             echo -ne "$file $thread_count/$cores $r/$round  \r"
-            result=$(./$file $thread_count)
+            result=$(./$file $thread_count 1)
             creation+=($(echo "$result" | grep "Creation" | grep -oE "[0-9]+"))
             execution+=($(echo "$result" | grep "Execution" | grep -oE "[0-9]+"))
             deconstruction+=($(echo "$result" | grep "Deconstruction" | grep -oE "[0-9]+"))
